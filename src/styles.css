@@ -40,7 +40,9 @@ body {
 }
 
 .brand-mark {
-  font-size: 42px;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
   filter: drop-shadow(0 0 12px rgba(139, 124, 246, 0.6));
 }
 

@@ -233,25 +233,30 @@ mod windows_impl {
         let guid_raw = guid_raw
             .strip_prefix('(')?
             .strip_suffix(')')?;
-        let key_name = format!("{{{guid_raw}}}");
         let flow_key = if flow_name == "playback" {
             "Render"
         } else {
             "Capture"
         };
-        let path = format!(
-            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\{flow_key}\\{key_name}\\Properties"
+        let base = format!(
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\{flow_key}"
         );
         let hklm = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE);
-        let key = hklm.open_subkey(&path).ok()?;
-        let name: String = key
-            .get_value("{a45c254e-df1c-4efd-8020-67d146a8f0e},14")
-            .ok()?;
-        if name.is_empty() {
-            None
-        } else {
-            Some(name)
+        // Try the {guid} key name first, then the bare guid — whichever layout
+        // this machine uses.
+        for key_name in [format!("{{{guid_raw}}}"), guid_raw.to_string()] {
+            let path = format!("{base}\\{key_name}\\Properties");
+            if let Ok(key) = hklm.open_subkey(&path) {
+                if let Ok(name) = key.get_value::<String, _>(
+                    "{a45c254e-df1c-4efd-8020-67d146a8f0e},14",
+                ) {
+                    if !name.is_empty() {
+                        return Some(name);
+                    }
+                }
+            }
         }
+        None
     }
 
     /// Read PKEY_Device_FriendlyName from the endpoint's property store.

@@ -18,9 +18,7 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">
-            &#x1F98A;
-          </span>
+          <img className="brand-mark" src="emblem.png" alt="" aria-hidden="true" />
           <div>
             <h1>Majestic Fox</h1>
             <p className="subtitle">Stream co-pilot &mdash; rig check &amp; script profiles</p>
