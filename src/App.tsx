@@ -1,12 +1,14 @@
 import { useState } from "react";
 import HealthDashboard from "./components/HealthDashboard";
 import ProfileManager from "./components/ProfileManager";
+import MusePanel from "./components/MusePanel";
 
-type Tab = "health" | "profiles";
+type Tab = "health" | "profiles" | "muse";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "health", label: "Health" },
   { id: "profiles", label: "Profiles" },
+  { id: "muse", label: "Muse" },
 ];
 
 export default function App() {
@@ -38,7 +40,15 @@ export default function App() {
           ))}
         </nav>
       </header>
-      <main>{tab === "health" ? <HealthDashboard /> : <ProfileManager />}</main>
+      <main>
+        {tab === "health" ? (
+          <HealthDashboard />
+        ) : tab === "profiles" ? (
+          <ProfileManager />
+        ) : (
+          <MusePanel />
+        )}
+      </main>
       <footer className="app-footer">
         <span>Phase 1: rig-health checks + profile library &middot; featherweight build for the Dell</span>
       </footer>

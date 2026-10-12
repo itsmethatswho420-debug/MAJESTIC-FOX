@@ -206,9 +206,12 @@ mod windows_impl {
                 .unwrap_or_default();
             ep.is_default = default_id.map(|d| d == id).unwrap_or(false);
             // Friendly name when we can get it; otherwise the raw endpoint ID.
+            // Primary: IPropertyStore. Fallback: the same registry value the
+            // v0.1 PowerShell script read (proven on Harry's Dell).
             ep.name = friendly_name(&device)
                 .ok()
                 .filter(|n| !n.is_empty())
+                .or_else(|| friendly_name_registry(&id, flow_name))
                 .unwrap_or(id);
 
             match mix_sample_rate(&device) {
@@ -218,6 +221,36 @@ mod windows_impl {
                 }
             }
             ep
+        }
+    }
+
+    /// Registry fallback for the friendly name, mirroring the v0.1 PowerShell
+    /// script (HKLM\...\MMDevices\Audio\{Render|Capture}\{guid}\Properties).
+    /// Endpoint IDs look like "{0.0.0.00000000}.(guid)" — the registry key is
+    /// "{guid}".
+    fn friendly_name_registry(device_id: &str, flow_name: &str) -> Option<String> {
+        let guid_raw = device_id.rsplit('.').next()?.trim();
+        let guid_raw = guid_raw
+            .strip_prefix('(')?
+            .strip_suffix(')')?;
+        let key_name = format!("{{{guid_raw}}}");
+        let flow_key = if flow_name == "playback" {
+            "Render"
+        } else {
+            "Capture"
+        };
+        let path = format!(
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\{flow_key}\\{key_name}\\Properties"
+        );
+        let hklm = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE);
+        let key = hklm.open_subkey(&path).ok()?;
+        let name: String = key
+            .get_value("{a45c254e-df1c-4efd-8020-67d146a8f0e},14")
+            .ok()?;
+        if name.is_empty() {
+            None
+        } else {
+            Some(name)
         }
     }
 

@@ -363,3 +363,18 @@ body {
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+.muse-panel {
+  max-width: 560px;
+  margin: 2rem auto;
+  text-align: center;
+  padding: 2rem 1.5rem;
+}
+.muse-panel h2 {
+  font-size: 1.4rem;
+  margin-bottom: 0.5rem;
+}
+.muse-panel p {
+  opacity: 0.85;
+  margin-bottom: 1.25rem;
+}
