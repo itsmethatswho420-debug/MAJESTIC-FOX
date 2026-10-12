@@ -31,6 +31,10 @@ pub struct AudioEndpoint {
     /// Friendly name, e.g. "PlayStation Headset". Falls back to the endpoint
     /// ID string when the name cannot be read.
     pub name: String,
+    /// Diagnostic: which lookup produced `name` — "property", "registry",
+    /// "registry-enum", or "raw" (every lookup failed). Shown as a small tag
+    /// in the UI so one screenshot reveals the failing path on real hardware.
+    pub name_source: String,
     /// "playback" (render) or "recording" (capture).
     pub flow: String,
     /// Mix-format sample rate in Hz. 0 = unreadable.
@@ -199,6 +203,7 @@ mod windows_impl {
         unsafe {
             let mut ep = AudioEndpoint {
                 name: String::new(),
+                name_source: "raw".to_string(),
                 flow: flow_name.to_string(),
                 sample_rate_hz: 0,
                 is_default: false,
@@ -219,13 +224,31 @@ mod windows_impl {
                 .unwrap_or_default();
             ep.is_default = default_id.map(|d| d == id).unwrap_or(false);
             // Friendly name when we can get it; otherwise the raw endpoint ID.
-            // Primary: IPropertyStore. Fallback: the same registry value the
-            // v0.1 PowerShell script read (proven on Harry's Dell).
-            ep.name = friendly_name(&device)
-                .ok()
-                .filter(|n| !n.is_empty())
-                .or_else(|| friendly_name_registry(&id, flow_name))
-                .unwrap_or(id);
+            // v0.3.0 diagnostic: name_source records WHICH lookup produced the
+            // name ("property" | "registry" | "registry-enum" | "raw") so one
+            // screenshot tells us exactly which path fails on real hardware.
+            // Primary: IPropertyStore. Fallbacks mirror the registry values
+            // the PowerShell health checks read on this machine.
+            ep.name_source = "raw".to_string();
+            ep.name = match friendly_name(&device) {
+                Ok(n) if !n.is_empty() => {
+                    ep.name_source = "property".to_string();
+                    n
+                }
+                _ => match friendly_name_registry(&id, flow_name) {
+                    Some(n) => {
+                        ep.name_source = "registry".to_string();
+                        n
+                    }
+                    None => match friendly_name_registry_enum(&id, flow_name) {
+                        Some(n) => {
+                            ep.name_source = "registry-enum".to_string();
+                            n
+                        }
+                        None => id,
+                    },
+                },
+            };
 
             match mix_sample_rate(&device) {
                 Ok(hz) => ep.sample_rate_hz = hz,
@@ -237,27 +260,15 @@ mod windows_impl {
         }
     }
 
-    /// Registry fallback for the friendly name, mirroring the v0.1 PowerShell
-    /// script (HKLM\...\MMDevices\Audio\{Render|Capture}\{guid}\Properties).
-    /// Endpoint IDs look like "{0.0.0.00000000}.{guid}" where the guid part
-    /// already carries braces (occasionally parens on odd drivers). Strip
-    /// either wrapper, then look up the canonical "{guid}" key name.
-    fn friendly_name_registry(device_id: &str, flow_name: &str) -> Option<String> {
-        let segment = device_id.rsplit('.').next()?.trim();
-        // Strip one layer of braces or parens, whichever wraps the guid.
-        let clean = segment
-            .strip_prefix('{')
-            .and_then(|s| s.strip_suffix('}'))
-            .or_else(|| {
-                segment
-                    .strip_prefix('(')
-                    .and_then(|s| s.strip_suffix(')'))
-            })
-            .unwrap_or(segment)
-            .trim();
-        if clean.is_empty() {
-            return None;
-        }
+    /// Registry-enum fallback: enumerate
+    /// HKLM\...\MMDevices\Audio\{Render|Capture} directly (exactly like the
+    /// proven PowerShell health check) and match the endpoint's guid against
+    /// the subkey names, case-insensitively. This bypasses endpoint-ID
+    /// parsing entirely — if this hits while the direct-path lookup misses,
+    /// the ID parsing was the bug; if both miss, the registry read itself
+    /// is the problem.
+    fn friendly_name_registry_enum(device_id: &str, flow_name: &str) -> Option<String> {
+        let want_guid = guid_from_endpoint_id(device_id)?.to_lowercase();
         let flow_key = if flow_name == "playback" {
             "Render"
         } else {
@@ -267,16 +278,62 @@ mod windows_impl {
             "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\{flow_key}"
         );
         let hklm = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE);
-        // Canonical "{guid}" first, then the bare guid as a last resort.
-        for key_name in [format!("{{{clean}}}"), clean.to_string()] {
-            let path = format!("{base}\\{key_name}\\Properties");
+        let flow_key_handle = hklm.open_subkey(&base).ok()?;
+        for sub in flow_key_handle.enum_keys().filter_map(|k| k.ok()) {
+            if sub.to_lowercase() != want_guid {
+                continue;
+            }
+            let path = format!("{base}\\{sub}\\Properties");
             if let Ok(key) = hklm.open_subkey(&path) {
-                if let Ok(name) = key.get_value::<String, _>(
-                    "{a45c254e-df1c-4efd-8020-67d146a8f0e},14",
-                ) {
-                    if !name.is_empty() {
-                        return Some(name);
+                if let Ok(name) =
+                    key.get_value::<String, _>("{a45c254e-df1c-4efd-8020-67d146a8f0e},14")
+                {
+                    if !name.trim().is_empty() {
+                        return Some(name.trim().to_string());
                     }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract the "{guid}" segment from an endpoint ID shaped like
+    /// "{0.0.0.00000000}.{guid-with-braces}". Returns None when the shape
+    /// is unexpected.
+    fn guid_from_endpoint_id(device_id: &str) -> Option<String> {
+        let segment = device_id.rsplit('.').next()?.trim();
+        let clean = segment
+            .strip_prefix('{')
+            .and_then(|s| s.strip_suffix('}'))
+            .unwrap_or(segment)
+            .trim();
+        if clean.is_empty() {
+            return None;
+        }
+        Some(format!("{{{clean}}}"))
+    }
+
+    /// Registry direct-path fallback for the friendly name, mirroring the
+    /// PowerShell health check
+    /// (HKLM\...\MMDevices\Audio\{Render|Capture}\{guid}\Properties).
+    fn friendly_name_registry(device_id: &str, flow_name: &str) -> Option<String> {
+        let guid_braced = guid_from_endpoint_id(device_id)?;
+        let flow_key = if flow_name == "playback" {
+            "Render"
+        } else {
+            "Capture"
+        };
+        let base = format!(
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\{flow_key}"
+        );
+        let hklm = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE);
+        let path = format!("{base}\\{guid_braced}\\Properties");
+        if let Ok(key) = hklm.open_subkey(&path) {
+            if let Ok(name) = key
+                .get_value::<String, _>("{a45c254e-df1c-4efd-8020-67d146a8f0e},14")
+            {
+                if !name.trim().is_empty() {
+                    return Some(name.trim().to_string());
                 }
             }
         }

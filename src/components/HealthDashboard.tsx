@@ -7,6 +7,8 @@ const TARGET_HZ = 48_000;
 /** Mirrors `AudioEndpoint` in src-tauri/src/system_health.rs (camelCase serde). */
 interface AudioEndpoint {
   name: string;
+  /** Diagnostic: which lookup produced the name ("property" | "registry" | "registry-enum" | "raw"). */
+  nameSource: string;
   flow: string; // "playback" | "recording"
   sampleRateHz: number;
   isDefault: boolean;
@@ -229,6 +231,15 @@ export default function HealthDashboard() {
                 <div className="endpoint-name">
                   {ep.name || "(unnamed device)"}
                   {ep.isDefault && <span className="default-tag">default</span>}
+                  {/* Diagnostic tag: which name lookup succeeded. Temporary —
+                      remove once the friendly-name issue is resolved. */}
+                  <span
+                    className="default-tag"
+                    title="Which device-name lookup produced this label"
+                    style={{ opacity: 0.75 }}
+                  >
+                    [{ep.nameSource || "raw"}]
+                  </span>
                 </div>
                 <div className="endpoint-meta">
                   {ep.flow} &middot; {formatHz(ep.sampleRateHz)}

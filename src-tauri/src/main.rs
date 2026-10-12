@@ -2,6 +2,7 @@
 
 mod profiles;
 mod system_health;
+mod zen_export;
 
 fn main() {
     tauri::Builder::default()
@@ -11,7 +12,8 @@ fn main() {
             profiles::list_profiles,
             profiles::get_profile,
             profiles::save_profile,
-            profiles::delete_profile
+            profiles::delete_profile,
+            zen_export::export_zen_gpc
         ])
         .run(tauri::generate_context!())
         .expect("error while running Majestic Fox");

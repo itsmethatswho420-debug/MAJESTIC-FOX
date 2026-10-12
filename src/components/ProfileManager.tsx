@@ -13,12 +13,10 @@ import { invoke } from "@tauri-apps/api/core";
  * with the same id (the seeds themselves are never modified). Deleting a
  * user override of a seed id restores the seed's original values.
  *
- * TODO (later milestone): push the active profile's values to the Zen
- * automatically (USB/serial link from the app to the Zen). Until that link
- * exists, the workflow is manual: read the numbers here, dial them in with
- * the Zen quick-nudge (hold ADS + D-pad UP/DOWN on the Fox custom script,
- * same 0-100 scale). The "Push to Zen" button below is disabled and marked
- * "coming soon" until then — it must never look like it works when it doesn't.
+ * v0.3.0: Export to Zen. The app cannot push values into a running Zen
+ * script (GPC has no PC-to-script channel), so "Export for Zen" renders a
+ * clean Fox V3 `.gpc` with the profile values baked in, ready to compile
+ * in Zen Studio. The button says exactly what it does — never "Push".
  */
 
 /** Mirrors `ProfileValues` in src-tauri/src/profiles.rs (camelCase serde). */
@@ -130,6 +128,8 @@ export default function ProfileManager() {
   const [fatal, setFatal] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportPath, setExportPath] = useState<string | null>(null);
   // null = no form open; { mode: "new" } or { mode: "edit", id } otherwise.
   const [form, setForm] = useState<{ mode: "new" | "edit"; id: string | null; state: FormState } | null>(null);
 
@@ -281,6 +281,24 @@ export default function ProfileManager() {
 
   const selected = profiles?.find((p) => p.id === selectedId) ?? null;
   const active = profiles?.find((p) => p.id === activeId) ?? null;
+
+  /** Export the selected profile (or all profiles) as a Fox V3 `.gpc`. */
+  const exportZen = async (profileId: string | null) => {
+    if (exporting) return;
+    setExporting(true);
+    setFatal(null);
+    try {
+      const path = await invoke<string>("export_zen_gpc", { profileId });
+      setExportPath(path);
+    } catch (e) {
+      setFatal(
+        e instanceof Error ? e.message : typeof e === "string" ? e : "Could not export the script.",
+      );
+      setExportPath(null);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <section className="card">
@@ -457,22 +475,43 @@ export default function ProfileManager() {
                 Delete
               </button>
             )}
-            {/* TODO: wire to the Zen link milestone. Disabled + labeled so it
-                can never be mistaken for working. */}
+            {/* Export for Zen: renders a Fox V3 .gpc with the values baked in.
+                Honest label — it generates a file, it does not transmit. */}
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void exportZen(selected.id)}
+              disabled={exporting}
+              title="Generate a Fox V3 .gpc script with this profile's values baked in"
+            >
+              {exporting ? "Exporting…" : "Export for Zen"}
+            </button>
             <button
               type="button"
               className="btn"
-              disabled
-              title="Coming soon — automatic push to the Zen is a later milestone"
+              onClick={() => void exportZen(null)}
+              disabled={exporting}
+              title="Generate one Fox V3 .gpc with every profile as a switchable preset"
             >
-              Push to Zen &mdash; coming soon
+              {exporting ? "Exporting…" : "Export all for Zen"}
             </button>
           </div>
           <p className="muted">
-            For now: read the numbers above, then dial them in on the Zen with the
-            quick-nudge (hold ADS, tap D-pad UP/DOWN for vertical, LEFT/RIGHT for
-            horizontal). Same 0-100 scale.
+            Export writes a Fox V3 script file with your numbers baked in — then
+            load it in Zen Studio (Compiler &rarr; open file &rarr; Compile &rarr;
+            drag to a memory slot &rarr; Program). Your Fox V2 custom script is
+            untouched. You can still fine-tune on the device: hold ADS + D-pad.
           </p>
+        </div>
+      )}
+
+      {exportPath && (
+        <div className="banner banner-ok">
+          Script written: <strong>{exportPath}</strong>
+          <br />
+          In Zen Studio: Compiler tab &rarr; open this file &rarr; Compile &rarr;
+          drag to a memory slot &rarr; Program. On the controller: hold VIEW +
+          D-pad LEFT/RIGHT to switch weapon presets.
         </div>
       )}
     </section>
