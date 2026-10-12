@@ -84,7 +84,7 @@ mod windows_impl {
     use windows::{
         core::{GUID, PROPVARIANT, PWSTR},
         Win32::{
-            Foundation::E_UNEXPECTED,
+            Foundation::{E_UNEXPECTED, RPC_E_CHANGED_MODE, S_FALSE, S_OK},
             Media::{
                 Audio::{
                     IAudioClient, IMMDevice, IMMDeviceCollection, IMMDeviceEnumerator,
@@ -114,20 +114,32 @@ mod windows_impl {
 
     /// RAII guard: Tauri commands run on a thread-pool, and COM requires
     /// per-thread initialization. MTA is fine for the MMDevice APIs.
-    struct ComGuard;
+    struct ComGuard {
+        initialized: bool,
+    }
     impl ComGuard {
         unsafe fn init() -> windows::core::Result<Self> {
-            // S_OK or S_FALSE (already initialized) both map to Ok here;
-            // a real failure (e.g. conflicting apartment mode) surfaces.
-            // NOTE: `?` cannot be applied to HRESULT directly (it doesn't
-            // implement Try) — `.ok()?` converts it to Result first.
-            CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
-            Ok(Self)
+            // Tauri/WebView2 threads often already run COM in STA mode. Asking
+            // for MTA then returns RPC_E_CHANGED_MODE ("cannot change thread
+            // mode after it is set") — that is NOT fatal: COM is alive on this
+            // thread, and WASAPI works fine from either apartment. Only fail
+            // on a genuinely bad HRESULT. We track whether WE initialized so
+            // Drop only uninitializes what we own.
+            let hr = CoInitializeEx(None, COINIT_MULTITHREADED);
+            if hr == S_OK || hr == S_FALSE {
+                Ok(Self { initialized: true })
+            } else if hr == RPC_E_CHANGED_MODE {
+                Ok(Self { initialized: false })
+            } else {
+                Err(windows::core::Error::from(hr))
+            }
         }
     }
     impl Drop for ComGuard {
         fn drop(&mut self) {
-            unsafe { CoUninitialize() };
+            if self.initialized {
+                unsafe { CoUninitialize() };
+            }
         }
     }
 
