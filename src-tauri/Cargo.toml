@@ -1,6 +1,6 @@
 [package]
 name = "majestic-fox"
-version = "0.1.8"
+version = "0.1.9"
 description = "Majestic Fox — Muse co-pilot. Phase 1: stream co-pilot rig-health checks."
 authors = ["Harry Lane"]
 edition = "2021"
