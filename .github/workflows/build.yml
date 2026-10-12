@@ -13,6 +13,11 @@ on:
     tags:
       - "v*"
 
+# Needed so the tauri-action step can create the GitHub Release and upload
+# the installers (repo default workflow permissions are read-only).
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
