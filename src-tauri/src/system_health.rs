@@ -110,6 +110,19 @@ mod windows_impl {
         pid: 14,
     };
 
+    // Fallback property keys, tried in order when the friendly name is
+    // missing: PKEY_Device_DeviceDesc (same fmtid, pid 2) and
+    // PKEY_DeviceInterface_FriendlyName
+    // ({026E516E-B814-414B-83CD-856D425EFCFE}, pid 2).
+    const PKEY_DEVICE_DEVICE_DESC: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0xA45C254E_DF1C_4EFD_8020_67D146A8F0E),
+        pid: 2,
+    };
+    const PKEY_DEVICEINTERFACE_FRIENDLY_NAME: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0x026E516E_B814_414B_83CD_856D425EFCFE),
+        pid: 2,
+    };
+
     // STGM_READ comes from windows::Win32::System::Com (imported above).
 
     /// RAII guard: Tauri commands run on a thread-pool, and COM requires
@@ -226,13 +239,25 @@ mod windows_impl {
 
     /// Registry fallback for the friendly name, mirroring the v0.1 PowerShell
     /// script (HKLM\...\MMDevices\Audio\{Render|Capture}\{guid}\Properties).
-    /// Endpoint IDs look like "{0.0.0.00000000}.(guid)" — the registry key is
-    /// "{guid}".
+    /// Endpoint IDs look like "{0.0.0.00000000}.{guid}" where the guid part
+    /// already carries braces (occasionally parens on odd drivers). Strip
+    /// either wrapper, then look up the canonical "{guid}" key name.
     fn friendly_name_registry(device_id: &str, flow_name: &str) -> Option<String> {
-        let guid_raw = device_id.rsplit('.').next()?.trim();
-        let guid_raw = guid_raw
-            .strip_prefix('(')?
-            .strip_suffix(')')?;
+        let segment = device_id.rsplit('.').next()?.trim();
+        // Strip one layer of braces or parens, whichever wraps the guid.
+        let clean = segment
+            .strip_prefix('{')
+            .and_then(|s| s.strip_suffix('}'))
+            .or_else(|| {
+                segment
+                    .strip_prefix('(')
+                    .and_then(|s| s.strip_suffix(')'))
+            })
+            .unwrap_or(segment)
+            .trim();
+        if clean.is_empty() {
+            return None;
+        }
         let flow_key = if flow_name == "playback" {
             "Render"
         } else {
@@ -242,9 +267,8 @@ mod windows_impl {
             "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\MMDevices\\Audio\\{flow_key}"
         );
         let hklm = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE);
-        // Try the {guid} key name first, then the bare guid — whichever layout
-        // this machine uses.
-        for key_name in [format!("{{{guid_raw}}}"), guid_raw.to_string()] {
+        // Canonical "{guid}" first, then the bare guid as a last resort.
+        for key_name in [format!("{{{clean}}}"), clean.to_string()] {
             let path = format!("{base}\\{key_name}\\Properties");
             if let Ok(key) = hklm.open_subkey(&path) {
                 if let Ok(name) = key.get_value::<String, _>(
@@ -259,26 +283,51 @@ mod windows_impl {
         None
     }
 
-    /// Read PKEY_Device_FriendlyName from the endpoint's property store.
+    /// Read a display name from the endpoint's property store. Tries, in
+    /// order: PKEY_Device_FriendlyName, PKEY_Device_DeviceDesc,
+    /// PKEY_DeviceInterface_FriendlyName. Returns Err only when all three
+    /// are missing — the caller then falls back to the registry lookup.
     fn friendly_name(device: &IMMDevice) -> windows::core::Result<String> {
+        unsafe {
+            let store: IPropertyStore = device.OpenPropertyStore(STGM_READ)?;
+            for key in [
+                &PKEY_DEVICE_FRIENDLY_NAME,
+                &PKEY_DEVICE_DEVICE_DESC,
+                &PKEY_DEVICEINTERFACE_FRIENDLY_NAME,
+            ] {
+                if let Ok(name) = read_prop_string(&store, key) {
+                    if !name.is_empty() {
+                        return Ok(name);
+                    }
+                }
+            }
+            Err(windows::core::Error::new(
+                E_UNEXPECTED,
+                "no usable device name property found",
+            ))
+        }
+    }
+
+    /// Read one LPWSTR property from an IPropertyStore. Ownership of the
+    /// CoTaskMemAlloc'd string transfers to us — convert, then free.
+    fn read_prop_string(
+        store: &IPropertyStore,
+        key: &PROPERTYKEY,
+    ) -> windows::core::Result<String> {
         unsafe {
             // PROPVARIANT is a newtype wrapper in windows-core 0.58, so field
             // access goes through as_raw(). Raw layout:
             // imp::PROPVARIANT { Anonymous: PROPVARIANT_0 (union)
             //   { Anonymous: PROPVARIANT_0_0 { vt: VARENUM, ...,
             //     Anonymous: PROPVARIANT_0_0_0 (union with pwszVal) } } }.
-            let store: IPropertyStore = device.OpenPropertyStore(STGM_READ)?;
-            let pv: PROPVARIANT = store.GetValue(&PKEY_DEVICE_FRIENDLY_NAME)?;
+            let pv: PROPVARIANT = store.GetValue(key)?;
             if pv.as_raw().Anonymous.Anonymous.vt != VT_LPWSTR.0 {
                 return Err(windows::core::Error::new(
                     E_UNEXPECTED,
-                    "friendly name property is not a string",
+                    "device name property is not a string",
                 ));
             }
             let pwsz: PWSTR = PWSTR(pv.as_raw().Anonymous.Anonymous.Anonymous.pwszVal);
-            // Convert before freeing: GetValue hands us a CoTaskMemAlloc'd
-            // LPWSTR that we own — free it here instead of PropVariantClear
-            // (avoids depending on that import path).
             let name = pwsz.to_string().map_err(|e| {
                 windows::core::Error::new(
                     E_UNEXPECTED,

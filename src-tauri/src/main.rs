@@ -9,7 +9,9 @@ fn main() {
             system_health::list_audio_endpoints,
             system_health::get_cpu_temp,
             profiles::list_profiles,
-            profiles::get_profile
+            profiles::get_profile,
+            profiles::save_profile,
+            profiles::delete_profile
         ])
         .run(tauri::generate_context!())
         .expect("error while running Majestic Fox");

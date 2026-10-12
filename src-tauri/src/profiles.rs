@@ -52,35 +52,48 @@ pub struct Profile {
     /// Human notes: what this profile is, that it's an example, how to tune.
     pub notes: String,
     pub values: ProfileValues,
+    /// Where this entry came from: "seed" (bundled, read-only) or "user"
+    /// (Harry's own, saved in the app-data dir). Never read from disk —
+    /// always stamped at list time so a hand-edited file can't lie about it.
+    #[serde(default, skip_serializing)]
+    pub source: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct SeedFile {
-    /// Ignored at runtime; documents that the seeds are examples.
+/// On-disk shape of a profiles file: seed bundle and user file alike.
+/// `_comment` is documentation only. `source` is never stored (see above).
+#[derive(Debug, Serialize, Deserialize)]
+struct ProfilesFile {
+    #[serde(rename = "_comment", default, skip_serializing_if = "Option::is_none")]
     #[allow(dead_code)]
-    _comment: Option<String>,
+    comment: Option<String>,
+    #[serde(default)]
     profiles: Vec<Profile>,
 }
 
 /// List every profile: user profiles first (when that file exists), then
-/// the bundled/dev seeds. User entries win on id collision.
+/// the bundled/dev seeds. User entries win on id collision. Each entry is
+/// stamped with its `source` ("user" / "seed") at list time.
 #[command]
 pub fn list_profiles(app: AppHandle) -> Result<Vec<Profile>, String> {
     let mut profiles: Vec<Profile> = Vec::new();
 
-    // 1. User profiles (future). Read-only for now — nothing writes this
-    //    file yet; when saving lands, it goes here.
+    // 1. User profiles. Read-write as of v0.2.0 — this is where Harry's own
+    //    saved profiles live.
     if let Some(user_file) = user_profiles_file(&app) {
         if user_file.exists() {
-            let user = read_profiles_file(&user_file)?;
+            let mut user = read_profiles_file(&user_file)?;
+            for p in &mut user {
+                p.source = "user".to_string();
+            }
             profiles.extend(user);
         }
     }
 
     // 2/3. Seed profiles (bundled resource, then dev fallback).
     let seed = read_profiles_file(&seed_profiles_path(&app)?)?;
-    for p in seed {
+    for mut p in seed {
         if !profiles.iter().any(|u| u.id == p.id) {
+            p.source = "seed".to_string();
             profiles.push(p);
         }
     }
@@ -92,6 +105,85 @@ pub fn list_profiles(app: AppHandle) -> Result<Vec<Profile>, String> {
 #[command]
 pub fn get_profile(app: AppHandle, id: String) -> Result<Option<Profile>, String> {
     Ok(list_profiles(app)?.into_iter().find(|p| p.id == id))
+}
+
+/// Save (create or update) one of Harry's own profiles. Seed profiles are
+/// never modified in place: saving an edit to a seed id writes a user-layer
+/// override with the same id, which wins at list time. Returns the saved
+/// profile stamped `source: "user"`.
+#[command]
+pub fn save_profile(app: AppHandle, mut profile: Profile) -> Result<Profile, String> {
+    validate_profile(&profile)?;
+    if profile.game.trim().is_empty() {
+        return Err("profile needs a game name (e.g. \"Warzone\")".to_string());
+    }
+    if profile.weapon.trim().is_empty() {
+        return Err("profile needs a weapon name (e.g. \"Assault Rifle\")".to_string());
+    }
+
+    let user_file = user_profiles_file(&app)
+        .ok_or_else(|| "could not resolve the app-data directory".to_string())?;
+    if let Some(parent) = user_file.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+    }
+
+    let mut stored = if user_file.exists() {
+        read_profiles_file(&user_file)?
+    } else {
+        Vec::new()
+    };
+
+    profile.source = "user".to_string();
+    match stored.iter_mut().find(|p| p.id == profile.id) {
+        Some(existing) => *existing = profile.clone(),
+        None => stored.push(profile.clone()),
+    }
+
+    write_profiles_file(&user_file, &stored)?;
+    Ok(profile)
+}
+
+/// Delete one of Harry's own profiles. Built-in seed profiles cannot be
+/// deleted (they ship with the app); deleting a user override of a seed id
+/// restores the seed's original values at the next list.
+#[command]
+pub fn delete_profile(app: AppHandle, id: String) -> Result<bool, String> {
+    let user_file = user_profiles_file(&app)
+        .ok_or_else(|| "could not resolve the app-data directory".to_string())?;
+    let mut stored = if user_file.exists() {
+        read_profiles_file(&user_file)?
+    } else {
+        Vec::new()
+    };
+
+    let before = stored.len();
+    stored.retain(|p| p.id != id);
+    if stored.len() == before {
+        return Err(format!(
+            "'{id}' is a built-in seed profile and cannot be deleted. \
+             Edit it instead — your edit is saved as your own override."
+        ));
+    }
+
+    write_profiles_file(&user_file, &stored)?;
+    Ok(true)
+}
+
+/// Write the user profiles file (pretty JSON, so it's human-readable if
+/// Harry ever opens it).
+fn write_profiles_file(path: &PathBuf, profiles: &[Profile]) -> Result<(), String> {
+    let file = ProfilesFile {
+        comment: Some(
+            "Harry's own Majestic Fox profiles. Saved from the app's Profiles tab. \
+             Safe to back up; the app re-reads this file on every list."
+                .to_string(),
+        ),
+        profiles: profiles.to_vec(),
+    };
+    let raw = serde_json::to_string_pretty(&file)
+        .map_err(|e| format!("could not serialize profiles: {e}"))?;
+    std::fs::write(path, raw).map_err(|e| format!("could not write {}: {e}", path.display()))
 }
 
 /// Future home of Harry's own saved profiles:
@@ -128,12 +220,12 @@ fn seed_profiles_path(app: &AppHandle) -> Result<PathBuf, String> {
 fn read_profiles_file(path: &PathBuf) -> Result<Vec<Profile>, String> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| format!("could not read {}: {e}", path.display()))?;
-    let seed: SeedFile = serde_json::from_str(&raw)
+    let file: ProfilesFile = serde_json::from_str(&raw)
         .map_err(|e| format!("could not parse {}: {e}", path.display()))?;
-    for p in &seed.profiles {
+    for p in &file.profiles {
         validate_profile(p)?;
     }
-    Ok(seed.profiles)
+    Ok(file.profiles)
 }
 
 fn validate_profile(p: &Profile) -> Result<(), String> {

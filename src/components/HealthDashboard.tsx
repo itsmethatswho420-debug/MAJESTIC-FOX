@@ -38,6 +38,87 @@ function formatHz(hz: number): string {
   return `${hz.toLocaleString()} Hz`;
 }
 
+interface ReadinessCheck {
+  label: string;
+  detail: string;
+  points: number;
+  max: number;
+}
+
+/**
+ * Go-live readiness score (0–100), computed only from what this tab actually
+ * measures — no invented inputs. Weights: sample-rate health 50, device
+ * readability 20, CPU temperature 20, playback+capture coverage 10.
+ */
+function readiness(endpoints: AudioEndpoint[] | null, cpu: CpuTemp | null): {
+  score: number;
+  checks: ReadinessCheck[];
+} {
+  const checks: ReadinessCheck[] = [];
+  if (endpoints === null || endpoints.length === 0) {
+    return { score: 0, checks };
+  }
+
+  const readable = endpoints.filter((e) => !e.error && e.sampleRateHz !== 0);
+  const onTarget = readable.filter((e) => e.sampleRateHz === TARGET_HZ);
+  const ratePoints = Math.round((50 * onTarget.length) / endpoints.length);
+  checks.push({
+    label: "Sample rates at 48,000 Hz",
+    detail:
+      onTarget.length === endpoints.length
+        ? "every device is on target"
+        : `${endpoints.length - onTarget.length} of ${endpoints.length} need fixing`,
+    points: ratePoints,
+    max: 50,
+  });
+
+  const unknown = endpoints.length - readable.length;
+  const readPoints = unknown === 0 ? 20 : Math.max(0, 20 - unknown * 10);
+  checks.push({
+    label: "Devices readable",
+    detail: unknown === 0 ? "all devices probed cleanly" : `${unknown} unreadable`,
+    points: readPoints,
+    max: 20,
+  });
+
+  let tempPoints = 10;
+  let tempDetail = "no temperature reading — not penalized";
+  if (cpu !== null && cpu.available && cpu.celsius !== null) {
+    if (cpu.celsius < 80) {
+      tempPoints = 20;
+      tempDetail = `CPU ~${cpu.celsius.toFixed(1)} °C — cool`;
+    } else if (cpu.celsius < 90) {
+      tempPoints = 10;
+      tempDetail = `CPU ~${cpu.celsius.toFixed(1)} °C — warm, watch it`;
+    } else {
+      tempPoints = 0;
+      tempDetail = `CPU ~${cpu.celsius.toFixed(1)} °C — hot, expect drift`;
+    }
+  }
+  checks.push({ label: "CPU temperature", detail: tempDetail, points: tempPoints, max: 20 });
+
+  const hasPlayback = endpoints.some((e) => e.flow === "playback");
+  const hasCapture = endpoints.some((e) => e.flow === "recording");
+  const coverPoints = hasPlayback && hasCapture ? 10 : 0;
+  checks.push({
+    label: "Playback + capture present",
+    detail:
+      hasPlayback && hasCapture
+        ? "both directions covered"
+        : `missing ${[!hasPlayback && "playback", !hasCapture && "capture"].filter(Boolean).join(" + ")}`,
+    points: coverPoints,
+    max: 10,
+  });
+
+  return { score: checks.reduce((s, c) => s + c.points, 0), checks };
+}
+
+function verdictOf(score: number): { label: string; cls: string } {
+  if (score >= 90) return { label: "READY — go live", cls: "banner-ok" };
+  if (score >= 70) return { label: "ALMOST — fix the flagged items", cls: "banner-warn" };
+  return { label: "NOT YET — fix before going live", cls: "banner-error" };
+}
+
 export default function HealthDashboard() {
   const [endpoints, setEndpoints] = useState<AudioEndpoint[] | null>(null);
   const [cpu, setCpu] = useState<CpuTemp | null>(null);
@@ -85,6 +166,9 @@ export default function HealthDashboard() {
   const allClear =
     endpoints !== null && counts.warn === 0 && counts.unknown === 0 && endpoints.length > 0;
 
+  const ready = readiness(endpoints, cpu);
+  const verdict = verdictOf(ready.score);
+
   return (
     <section className="card">
       <div className="card-head">
@@ -95,6 +179,31 @@ export default function HealthDashboard() {
       </div>
 
       {fatal && <div className="banner banner-error">{fatal}</div>}
+
+      {!fatal && endpoints !== null && endpoints.length > 0 && (
+        <div className="readiness">
+          <div className="readiness-top">
+            <div className="readiness-score">
+              <span className="readiness-number">{ready.score}</span>
+              <span className="readiness-of">/100</span>
+            </div>
+            <div className={`banner ${verdict.cls} readiness-verdict`}>{verdict.label}</div>
+          </div>
+          <ul className="readiness-checks">
+            {ready.checks.map((c) => (
+              <li key={c.label} className="readiness-check">
+                <span className={`pill ${c.points === c.max ? "pill-pass" : c.points === 0 ? "pill-error" : "pill-warn"}`}>
+                  {c.points}/{c.max}
+                </span>
+                <div className="endpoint-body">
+                  <div className="endpoint-name">{c.label}</div>
+                  <div className="endpoint-meta">{c.detail}</div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {!fatal && allClear && (
         <div className="banner banner-ok">

@@ -7,6 +7,12 @@ import { invoke } from "@tauri-apps/api/core";
  * The Zen runs ONE script (Harry's Fox custom). This tab is the profile
  * library: one profile per weapon/game holding that weapon's tuning values.
  *
+ * v0.2.0: Harry can add, edit, and delete his own profiles. They are stored
+ * in the app-data dir (`profiles.json`) as the "user" layer; the bundled
+ * seed profiles are read-only. Editing a seed saves a user-layer override
+ * with the same id (the seeds themselves are never modified). Deleting a
+ * user override of a seed id restores the seed's original values.
+ *
  * TODO (later milestone): push the active profile's values to the Zen
  * automatically (USB/serial link from the app to the Zen). Until that link
  * exists, the workflow is manual: read the numbers here, dial them in with
@@ -30,6 +36,8 @@ interface Profile {
   weapon: string;
   notes: string;
   values: ProfileValues;
+  /** "seed" (bundled, read-only) or "user" (Harry's own). Stamped by the backend. */
+  source: string;
 }
 
 const ACTIVE_KEY = "majestic-fox:active-profile-id";
@@ -57,6 +65,58 @@ const VALUE_ROWS: { key: keyof ProfileValues; label: string; hint: string }[] = 
   },
 ];
 
+const NUMERIC_KEYS: (keyof ProfileValues)[] = [
+  "antirecoilVertical",
+  "antirecoilHorizontal",
+  "stickDeadzone",
+];
+
+interface FormState {
+  game: string;
+  weapon: string;
+  notes: string;
+  antirecoilVertical: string;
+  antirecoilHorizontal: string;
+  stickDeadzone: string;
+  responseCurve: string;
+}
+
+const EMPTY_FORM: FormState = {
+  game: "",
+  weapon: "",
+  notes: "",
+  antirecoilVertical: "40",
+  antirecoilHorizontal: "0",
+  stickDeadzone: "3",
+  responseCurve: "dynamic",
+};
+
+/** Make a stable, URL-safe id for a new profile: "warzone-assault-rifle-a3f9". */
+function makeId(game: string, weapon: string): string {
+  const slug = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "profile";
+  const rand = Math.floor(Math.random() * 0xffff)
+    .toString(16)
+    .padStart(4, "0");
+  return `${slug(game)}-${slug(weapon)}-${rand}`;
+}
+
+function formFromProfile(p: Profile): FormState {
+  return {
+    game: p.game,
+    weapon: p.weapon,
+    notes: p.notes,
+    antirecoilVertical: String(p.values.antirecoilVertical),
+    antirecoilHorizontal: String(p.values.antirecoilHorizontal),
+    stickDeadzone: String(p.values.stickDeadzone),
+    responseCurve: p.values.responseCurve,
+  };
+}
+
 export default function ProfileManager() {
   const [profiles, setProfiles] = useState<Profile[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -68,6 +128,10 @@ export default function ProfileManager() {
     }
   });
   const [fatal, setFatal] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  // null = no form open; { mode: "new" } or { mode: "edit", id } otherwise.
+  const [form, setForm] = useState<{ mode: "new" | "edit"; id: string | null; state: FormState } | null>(null);
 
   const load = useCallback(async () => {
     setFatal(null);
@@ -76,6 +140,10 @@ export default function ProfileManager() {
       setProfiles(list);
       if (list.length > 0 && selectedId === null) {
         setSelectedId(list[0].id);
+      }
+      // If the selected profile vanished (deleted), fall back to the first.
+      if (selectedId !== null && !list.some((p) => p.id === selectedId)) {
+        setSelectedId(list.length > 0 ? list[0].id : null);
       }
     } catch (e) {
       // invoke() rejects outside the Tauri webview (plain browser) or when
@@ -106,6 +174,111 @@ export default function ProfileManager() {
     }
   };
 
+  const clearActiveIfDeleted = (id: string) => {
+    if (activeId === id) {
+      setActiveId(null);
+      try {
+        window.localStorage.removeItem(ACTIVE_KEY);
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  const openNewForm = () => {
+    setFormError(null);
+    setForm({ mode: "new", id: null, state: { ...EMPTY_FORM } });
+  };
+
+  const openEditForm = (p: Profile) => {
+    setFormError(null);
+    setForm({ mode: "edit", id: p.id, state: formFromProfile(p) });
+  };
+
+  const closeForm = () => {
+    setForm(null);
+    setFormError(null);
+  };
+
+  const setField = (key: keyof FormState, value: string) => {
+    setForm((f) => (f === null ? f : { ...f, state: { ...f.state, [key]: value } }));
+  };
+
+  const saveForm = async () => {
+    if (form === null || saving) return;
+    setFormError(null);
+
+    const st = form.state;
+    const game = st.game.trim();
+    const weapon = st.weapon.trim();
+    if (!game || !weapon) {
+      setFormError("Give the profile a game and a weapon name.");
+      return;
+    }
+
+    const nums: Record<string, number> = {};
+    for (const key of NUMERIC_KEYS) {
+      const raw = st[key].trim();
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 0 || n > 100) {
+        setFormError(`"${raw || "—"}" isn't a whole number from 0 to 100.`);
+        return;
+      }
+      nums[key] = n;
+    }
+    const curve = st.responseCurve.trim() || "dynamic";
+
+    // New profiles get a fresh id. Edits keep the original id — for a seed
+    // id that means "save my override of the built-in profile".
+    const id = form.mode === "new" ? makeId(game, weapon) : (form.id as string);
+
+    const profile: Profile = {
+      id,
+      game,
+      weapon,
+      notes: st.notes.trim(),
+      values: {
+        antirecoilVertical: nums.antirecoilVertical,
+        antirecoilHorizontal: nums.antirecoilHorizontal,
+        stickDeadzone: nums.stickDeadzone,
+        responseCurve: curve,
+      },
+      source: "user",
+    };
+
+    setSaving(true);
+    try {
+      const saved = await invoke<Profile>("save_profile", { profile });
+      await load();
+      setSelectedId(saved.id);
+      closeForm();
+    } catch (e) {
+      setFormError(
+        e instanceof Error ? e.message : typeof e === "string" ? e : "Could not save the profile.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteSelected = async (p: Profile) => {
+    if (p.source !== "user") return;
+    const label = `${p.game} — ${p.weapon}`;
+    if (!window.confirm(`Delete your profile "${label}"? Built-in profiles can't be deleted, but this one is yours.`)) {
+      return;
+    }
+    setFatal(null);
+    try {
+      await invoke<boolean>("delete_profile", { id: p.id });
+      clearActiveIfDeleted(p.id);
+      await load();
+    } catch (e) {
+      setFatal(
+        e instanceof Error ? e.message : typeof e === "string" ? e : "Could not delete the profile.",
+      );
+    }
+  };
+
   const selected = profiles?.find((p) => p.id === selectedId) ?? null;
   const active = profiles?.find((p) => p.id === activeId) ?? null;
 
@@ -113,9 +286,14 @@ export default function ProfileManager() {
     <section className="card">
       <div className="card-head">
         <h2>Profiles &mdash; one script, many profiles</h2>
-        <button className="btn" onClick={() => void load()}>
-          Reload
-        </button>
+        <div className="card-head-actions">
+          <button className="btn btn-primary" onClick={openNewForm}>
+            + New profile
+          </button>
+          <button className="btn" onClick={() => void load()}>
+            Reload
+          </button>
+        </div>
       </div>
 
       {fatal && <div className="banner banner-error">{fatal}</div>}
@@ -148,7 +326,9 @@ export default function ProfileManager() {
                 {isActive ? "ACTIVE" : p.game.toUpperCase()}
               </span>
               <div className="profile-card-title">{p.weapon}</div>
-              <div className="profile-card-id muted">{p.id}</div>
+              <div className="profile-card-id muted">
+                {p.source === "user" ? "yours" : "built-in"}
+              </div>
             </button>
           );
         })}
@@ -158,12 +338,93 @@ export default function ProfileManager() {
         <p className="muted">No profiles found. The seed file may be missing.</p>
       )}
 
-      {selected && (
+      {form !== null && (
+        <div className="profile-form">
+          <h3>{form.mode === "new" ? "New profile" : "Edit profile"}</h3>
+          {form.mode === "edit" &&
+            (profiles?.find((p) => p.id === form.id)?.source ?? "seed") === "seed" && (
+              <p className="muted">
+                This is a built-in profile — your edit is saved as <em>your own copy</em>;
+                the built-in stays untouched underneath.
+              </p>
+            )}
+          {formError && <div className="banner banner-error">{formError}</div>}
+          <div className="form-grid">
+            <label className="form-field">
+              <span>Game</span>
+              <input
+                type="text"
+                value={form.state.game}
+                onChange={(e) => setField("game", e.target.value)}
+                placeholder="Warzone"
+              />
+            </label>
+            <label className="form-field">
+              <span>Weapon</span>
+              <input
+                type="text"
+                value={form.state.weapon}
+                onChange={(e) => setField("weapon", e.target.value)}
+                placeholder="Assault Rifle"
+              />
+            </label>
+            <label className="form-field form-field-wide">
+              <span>Notes</span>
+              <input
+                type="text"
+                value={form.state.notes}
+                onChange={(e) => setField("notes", e.target.value)}
+                placeholder="What this profile is for…"
+              />
+            </label>
+            {VALUE_ROWS.filter((r) => r.key !== "responseCurve").map((row) => (
+              <label className="form-field" key={row.key}>
+                <span>{row.label} (0–100)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={form.state[row.key]}
+                  onChange={(e) => setField(row.key as keyof FormState, e.target.value)}
+                />
+              </label>
+            ))}
+            <label className="form-field">
+              <span>Response curve</span>
+              <input
+                type="text"
+                value={form.state.responseCurve}
+                onChange={(e) => setField("responseCurve", e.target.value)}
+                placeholder="linear / dynamic / aggressive"
+              />
+            </label>
+          </div>
+          <div className="profile-actions">
+            <button type="button" className="btn btn-primary" onClick={() => void saveForm()} disabled={saving}>
+              {saving ? "Saving…" : form.mode === "new" ? "Save profile" : "Save my copy"}
+            </button>
+            <button type="button" className="btn" onClick={closeForm} disabled={saving}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {selected && form === null && (
         <div className="profile-detail">
           <h3>
             {selected.game} &mdash; {selected.weapon}
           </h3>
-          <p className="muted">{selected.notes}</p>
+          <p className="muted">
+            {selected.notes}
+            {selected.source === "user" && (
+              <>
+                {" "}
+                <span className="pill pill-pass">YOURS</span>
+              </>
+            )}
+          </p>
           <ul className="value-list">
             {VALUE_ROWS.map((row) => (
               <li key={row.key} className="value-row">
@@ -184,6 +445,18 @@ export default function ProfileManager() {
             >
               {selected.id === activeId ? "Active profile" : "Set as active"}
             </button>
+            <button type="button" className="btn" onClick={() => openEditForm(selected)}>
+              Edit
+            </button>
+            {selected.source === "user" && (
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={() => void deleteSelected(selected)}
+              >
+                Delete
+              </button>
+            )}
             {/* TODO: wire to the Zen link milestone. Disabled + labeled so it
                 can never be mistaken for working. */}
             <button

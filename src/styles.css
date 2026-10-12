@@ -380,3 +380,122 @@ body {
   opacity: 0.85;
   margin-bottom: 1.25rem;
 }
+
+/* ---- v0.2.0: profile form, buttons, readiness score ---- */
+
+.card-head-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.btn-primary {
+  background: #7c5cff;
+  border-color: #7c5cff;
+  color: #fff;
+}
+
+.btn-danger {
+  border-color: #e5484d;
+  color: #ff8a8e;
+}
+
+.profile-form {
+  margin-top: 1.25rem;
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.profile-form h3 {
+  margin: 0 0 0.75rem;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+
+.form-field-wide {
+  grid-column: 1 / -1;
+}
+
+.form-field input {
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.35);
+  color: inherit;
+  font-size: 1rem;
+}
+
+.form-field input:focus {
+  outline: none;
+  border-color: #7c5cff;
+}
+
+.pill-error {
+  background: rgba(229, 72, 77, 0.18);
+  border: 1px solid #e5484d;
+  color: #ff8a8e;
+}
+
+/* Readiness score block on the Health tab */
+.readiness {
+  margin: 1rem 0 1.25rem;
+  padding: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.readiness-top {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.readiness-score {
+  display: flex;
+  align-items: baseline;
+  gap: 0.2rem;
+}
+
+.readiness-number {
+  font-size: 2.4rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.readiness-of {
+  opacity: 0.6;
+  font-size: 1rem;
+}
+
+.readiness-verdict {
+  flex: 1;
+  margin: 0;
+}
+
+.readiness-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.readiness-check {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
