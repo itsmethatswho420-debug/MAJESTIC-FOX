@@ -5,16 +5,16 @@
 //! and flag anything that is not 48000 Hz (the sync-drift fix for the Dell).
 //!
 //! Platform note: the WASAPI implementation below is Windows-only and is
-//! gated behind `#[cfg(target_os = "windows")]`. It has been written against
-//! the `windows` crate 0.58 API surface from documentation, but it has NOT
-//! been compiled (no Windows toolchain on this machine). On the first real
-//! Windows build, confirm these import paths in particular — the compiler
-//! will flag them immediately if they are wrong:
-//!   1. `windows::Win32::System::Variant::{PROPVARIANT, VT_LPWSTR}`
-//!   2. `windows::Win32::System::Com::STGM_READ` (STGM newtype constant)
-//!   3. `PWSTR::to_string()` availability on the pinned `windows` version.
-//! If (1) is wrong, the fallback is to use the endpoint ID string
-//! (`IMMDevice::GetId`) as the display name and drop the friendly-name lookup.
+//! gated behind `#[cfg(target_os = "windows")]`. It was written against the
+//! `windows` crate 0.58 API from documentation and fixed against the real
+//! compiler on the first cloud builds (v0.1.1: import paths + HRESULT/UTF-16
+//! conversions). Import paths verified:
+//!   1. `windows::Win32::Media::Audio::WAVEFORMATEX`
+//!   2. `windows::Win32::System::Com::StructuredStorage::PROPVARIANT`
+//!      (needs the `Win32_System_Com_StructuredStorage` crate feature)
+//!   3. `windows::Win32::System::Variant::VT_LPWSTR`
+//! If the friendly-name lookup ever breaks on a future `windows` version,
+//! the fallback is the endpoint ID string (`IMMDevice::GetId`).
 
 use serde::Serialize;
 use tauri::command;
@@ -88,16 +88,17 @@ mod windows_impl {
             Media::{
                 Audio::{
                     IAudioClient, IMMDevice, IMMDeviceCollection, IMMDeviceEnumerator,
-                    MMDeviceEnumerator, DEVICE_STATE_ACTIVE, eCapture, eMultimedia, eRender,
+                    MMDeviceEnumerator, WAVEFORMATEX,
+                    DEVICE_STATE_ACTIVE, eCapture, eMultimedia, eRender,
                 },
-                WAVEFORMATEX,
             },
             System::{
                 Com::{
                     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize,
                     CLSCTX_ALL, COINIT_MULTITHREADED, STGM_READ,
+                    StructuredStorage::PROPVARIANT,
                 },
-                Variant::{PROPVARIANT, VT_LPWSTR},
+                Variant::VT_LPWSTR,
             },
             UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY},
         },
@@ -119,7 +120,9 @@ mod windows_impl {
         unsafe fn init() -> windows::core::Result<Self> {
             // S_OK or S_FALSE (already initialized) both map to Ok here;
             // a real failure (e.g. conflicting apartment mode) surfaces.
-            CoInitializeEx(None, COINIT_MULTITHREADED)?;
+            // NOTE: `?` cannot be applied to HRESULT directly (it doesn't
+            // implement Try) — `.ok()?` converts it to Result first.
+            CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
             Ok(Self)
         }
     }
@@ -142,10 +145,13 @@ mod windows_impl {
                     enumerator.EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE)?;
 
                 // Default endpoint for this flow (best effort — may be absent).
+                // NOTE: PWSTR::to_string() yields Result<_, FromUtf16Error>,
+                // so the closure must wrap it in Ok(..) to satisfy and_then's
+                // Result<_, windows::core::Error> requirement.
                 let default_id: Option<String> = enumerator
                     .GetDefaultAudioEndpoint(flow, eMultimedia)
                     .and_then(|d| d.GetId())
-                    .and_then(|pwsz| pwsz.to_string())
+                    .and_then(|pwsz| Ok(pwsz.to_string()?))
                     .ok();
 
                 let count = collection.GetCount()?;
@@ -185,7 +191,7 @@ mod windows_impl {
 
             let id = device
                 .GetId()
-                .and_then(|pwsz| pwsz.to_string())
+                .and_then(|pwsz| Ok(pwsz.to_string()?))
                 .unwrap_or_default();
             ep.is_default = default_id.map(|d| d == id).unwrap_or(false);
             // Friendly name when we can get it; otherwise the raw endpoint ID.
@@ -207,10 +213,9 @@ mod windows_impl {
     /// Read PKEY_Device_FriendlyName from the endpoint's property store.
     fn friendly_name(device: &IMMDevice) -> windows::core::Result<String> {
         unsafe {
-            // NOTE: verify `PROPVARIANT` / `VT_LPWSTR` import path on first
-            // Windows build (see module docs). The union access below follows
-            // the windows-rs generated layout: PROPVARIANT { Anonymous:
-            // PROPVARIANT_0 { vt, ..., Anonymous: PROPVARIANT_0_0 (union) } }.
+            // PROPVARIANT layout (verified against the windows-rs docs):
+            // PROPVARIANT { Anonymous: PROPVARIANT_0 { vt: VARENUM, ...,
+            //   Anonymous: PROPVARIANT_0_0 (union with pwszVal) } }.
             let store: IPropertyStore = device.OpenPropertyStore(STGM_READ)?;
             let pv: PROPVARIANT = store.GetValue(&PKEY_DEVICE_FRIENDLY_NAME)?;
             if pv.Anonymous.vt != VT_LPWSTR {
@@ -220,9 +225,15 @@ mod windows_impl {
                 ));
             }
             let pwsz: PWSTR = pv.Anonymous.Anonymous.pwszVal;
-            let name = pwsz.to_string();
-            // GetValue hands us a CoTaskMemAlloc'd LPWSTR — we own it now.
-            // (Avoids depending on the PropVariantClear import path.)
+            // Convert before freeing: GetValue hands us a CoTaskMemAlloc'd
+            // LPWSTR that we own — free it here instead of PropVariantClear
+            // (avoids depending on that import path).
+            let name = pwsz.to_string().map_err(|e| {
+                windows::core::Error::new(
+                    E_UNEXPECTED,
+                    format!("device name is not valid UTF-16: {e:?}"),
+                )
+            });
             CoTaskMemFree(pwsz.0 as *const core::ffi::c_void);
             name
         }
