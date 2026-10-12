@@ -219,13 +219,13 @@ mod windows_impl {
             //     Anonymous: PROPVARIANT_0_0_0 (union with pwszVal) } } }.
             let store: IPropertyStore = device.OpenPropertyStore(STGM_READ)?;
             let pv: PROPVARIANT = store.GetValue(&PKEY_DEVICE_FRIENDLY_NAME)?;
-            if pv.as_raw().Anonymous.Anonymous.vt != VT_LPWSTR {
+            if pv.as_raw().Anonymous.Anonymous.vt != VT_LPWSTR.0 {
                 return Err(windows::core::Error::new(
                     E_UNEXPECTED,
                     "friendly name property is not a string",
                 ));
             }
-            let pwsz: PWSTR = pv.as_raw().Anonymous.Anonymous.Anonymous.pwszVal;
+            let pwsz: PWSTR = PWSTR(pv.as_raw().Anonymous.Anonymous.Anonymous.pwszVal);
             // Convert before freeing: GetValue hands us a CoTaskMemAlloc'd
             // LPWSTR that we own — free it here instead of PropVariantClear
             // (avoids depending on that import path).
