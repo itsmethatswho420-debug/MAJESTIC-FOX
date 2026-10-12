@@ -10,7 +10,7 @@
 //! compiler on the first cloud builds (v0.1.1: import paths + HRESULT/UTF-16
 //! conversions). Import paths verified:
 //!   1. `windows::Win32::Media::Audio::WAVEFORMATEX`
-//!   2. `windows::Win32::System::Com::StructuredStorage::PROPVARIANT`
+//!   2. `windows::core::PROPVARIANT`
 //!      (needs the `Win32_System_Com_StructuredStorage` crate feature)
 //!   3. `windows::Win32::System::Variant::VT_LPWSTR`
 //! If the friendly-name lookup ever breaks on a future `windows` version,
@@ -82,7 +82,7 @@ pub fn get_cpu_temp() -> Result<CpuTemp, String> {
 mod windows_impl {
     use super::AudioEndpoint;
     use windows::{
-        core::{GUID, PWSTR},
+        core::{GUID, PROPVARIANT, PWSTR},
         Win32::{
             Foundation::E_UNEXPECTED,
             Media::{
@@ -96,7 +96,6 @@ mod windows_impl {
                 Com::{
                     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize,
                     CLSCTX_ALL, COINIT_MULTITHREADED, STGM_READ,
-                    StructuredStorage::PROPVARIANT,
                 },
                 Variant::VT_LPWSTR,
             },
@@ -213,18 +212,20 @@ mod windows_impl {
     /// Read PKEY_Device_FriendlyName from the endpoint's property store.
     fn friendly_name(device: &IMMDevice) -> windows::core::Result<String> {
         unsafe {
-            // PROPVARIANT layout (verified against the windows-rs docs):
-            // PROPVARIANT { Anonymous: PROPVARIANT_0 { vt: VARENUM, ...,
-            //   Anonymous: PROPVARIANT_0_0 (union with pwszVal) } }.
+            // PROPVARIANT is a newtype wrapper in windows-core 0.58, so field
+            // access goes through as_raw(). Raw layout:
+            // imp::PROPVARIANT { Anonymous: PROPVARIANT_0 (union)
+            //   { Anonymous: PROPVARIANT_0_0 { vt: VARENUM, ...,
+            //     Anonymous: PROPVARIANT_0_0_0 (union with pwszVal) } } }.
             let store: IPropertyStore = device.OpenPropertyStore(STGM_READ)?;
             let pv: PROPVARIANT = store.GetValue(&PKEY_DEVICE_FRIENDLY_NAME)?;
-            if pv.Anonymous.vt != VT_LPWSTR {
+            if pv.as_raw().Anonymous.Anonymous.vt != VT_LPWSTR {
                 return Err(windows::core::Error::new(
                     E_UNEXPECTED,
                     "friendly name property is not a string",
                 ));
             }
-            let pwsz: PWSTR = pv.Anonymous.Anonymous.pwszVal;
+            let pwsz: PWSTR = pv.as_raw().Anonymous.Anonymous.Anonymous.pwszVal;
             // Convert before freeing: GetValue hands us a CoTaskMemAlloc'd
             // LPWSTR that we own — free it here instead of PropVariantClear
             // (avoids depending on that import path).
@@ -234,7 +235,7 @@ mod windows_impl {
                     format!("device name is not valid UTF-16: {e:?}"),
                 )
             });
-            CoTaskMemFree(pwsz.0 as *const core::ffi::c_void);
+            CoTaskMemFree(Some(pwsz.0 as *const core::ffi::c_void));
             name
         }
     }
@@ -254,7 +255,7 @@ mod windows_impl {
             // WAVEFORMATEXTENSIBLE shares the WAVEFORMATEX prefix, so
             // nSamplesPerSec is valid either way.
             let hz = (*fmt).nSamplesPerSec;
-            CoTaskMemFree(fmt as *const core::ffi::c_void);
+            CoTaskMemFree(Some(fmt as *const core::ffi::c_void));
             Ok(hz)
         }
     }
