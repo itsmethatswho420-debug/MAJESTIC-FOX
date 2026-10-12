@@ -1,0 +1,60 @@
+# Majestic Fox — cloud builds (Windows)
+#
+# Push a tag like v0.1.0 and GitHub Actions builds the Windows installer in
+# the cloud. Harry just downloads the finished .exe from the Releases page —
+# nothing is ever compiled on his Dell (thermals/storage).
+#
+# Trigger: git tag v0.1.0 && git push origin v0.1.0
+
+name: Build Majestic Fox (Windows)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Tauri keeps its target dir under src-tauri
+          workspaces: "src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri app and publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Majestic Fox ${{ github.ref_name }}"
+          releaseBody: |
+            Pre-stream rig-health check + profile library for the Fox custom script.
+
+            Download the `*-setup.exe` below, run it, done — no build tools needed.
+          releaseDraft: false
+          prerelease: false
+
+      - name: Attach portable .exe to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: src-tauri/target/release/majestic-fox.exe

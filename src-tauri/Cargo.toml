@@ -1,0 +1,32 @@
+[package]
+name = "majestic-fox"
+version = "0.1.0"
+description = "Majestic Fox — Muse co-pilot. Phase 1: stream co-pilot rig-health checks."
+authors = ["Harry Lane"]
+edition = "2021"
+
+# NOTE: this crate only links on Windows (WASAPI/WMI live behind
+# #[cfg(target_os = "windows")]). Do not expect `cargo build` to succeed on
+# Linux/macOS — the Windows build happens on the Dell or via CI.
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Media",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Variant",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+
+[features]
+default = []
+# custom-protocol = [ "tauri/custom-protocol" ]
