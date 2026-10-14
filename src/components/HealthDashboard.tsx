@@ -22,6 +22,35 @@ interface CpuTemp {
   note: string;
 }
 
+/** Mirrors `ZenPresence` in src-tauri/src/system_health.rs. */
+interface ZenPresence {
+  connected: boolean;
+  detail: string;
+}
+
+/** Mirrors `SystemStats` in src-tauri/src/rig_doctor.rs (camelCase serde). */
+interface SystemStats {
+  cpuPct: number;
+  coresPct: number[];
+  cpuName: string;
+  cpuCores: number;
+  memTotalGb: number;
+  memUsedGb: number;
+  memPct: number;
+  disks: { name: string; mount: string; totalGb: number; availableGb: number; usedPct: number }[];
+  net: { name: string; receivedMb: number; transmittedMb: number }[];
+  cpuTempC: number | null;
+  tempSource: string;
+}
+
+/** Mirrors `Diagnosis` in src-tauri/src/rig_doctor.rs. */
+interface Diagnosis {
+  level: "ok" | "watch" | "fix";
+  headline: string;
+  detail: string;
+  fixes: string[];
+}
+
 type EndpointStatus = "pass" | "warn" | "unknown";
 
 function statusOf(ep: AudioEndpoint): EndpointStatus {
@@ -124,6 +153,9 @@ function verdictOf(score: number): { label: string; cls: string } {
 export default function HealthDashboard() {
   const [endpoints, setEndpoints] = useState<AudioEndpoint[] | null>(null);
   const [cpu, setCpu] = useState<CpuTemp | null>(null);
+  const [stats, setStats] = useState<SystemStats | null>(null);
+  const [diagnosis, setDiagnosis] = useState<Diagnosis[] | null>(null);
+  const [zen, setZen] = useState<ZenPresence | null>(null);
   const [loading, setLoading] = useState(false);
   const [fatal, setFatal] = useState<string | null>(null);
 
@@ -131,12 +163,18 @@ export default function HealthDashboard() {
     setLoading(true);
     setFatal(null);
     try {
-      const [eps, temp] = await Promise.all([
+      const [eps, temp, sys, diag, zp] = await Promise.all([
         invoke<AudioEndpoint[]>("list_audio_endpoints"),
         invoke<CpuTemp>("get_cpu_temp"),
+        invoke<SystemStats>("get_system_stats"),
+        invoke<Diagnosis[]>("diagnose_rig"),
+        invoke<ZenPresence>("get_zen_presence"),
       ]);
       setEndpoints(eps);
       setCpu(temp);
+      setStats(sys);
+      setDiagnosis(diag);
+      setZen(zp);
     } catch (e) {
       // invoke() rejects outside the Tauri webview (plain browser) or when
       // the Rust command returns Err — either way, say so plainly.
@@ -149,6 +187,9 @@ export default function HealthDashboard() {
       );
       setEndpoints(null);
       setCpu(null);
+      setStats(null);
+      setDiagnosis(null);
+      setZen(null);
     } finally {
       setLoading(false);
     }
@@ -181,6 +222,12 @@ export default function HealthDashboard() {
       </div>
 
       {fatal && <div className="banner banner-error">{fatal}</div>}
+
+      {!fatal && zen !== null && (
+        <div className={`banner ${zen.connected ? "banner-ok" : "banner-warn"}`}>
+          {zen.connected ? "Zen connected" : "Zen not detected"} — {zen.detail}
+        </div>
+      )}
 
       {!fatal && endpoints !== null && endpoints.length > 0 && (
         <div className="readiness">
@@ -231,15 +278,6 @@ export default function HealthDashboard() {
                 <div className="endpoint-name">
                   {ep.name || "(unnamed device)"}
                   {ep.isDefault && <span className="default-tag">default</span>}
-                  {/* Diagnostic tag: which name lookup succeeded. Temporary —
-                      remove once the friendly-name issue is resolved. */}
-                  <span
-                    className="default-tag"
-                    title="Which device-name lookup produced this label"
-                    style={{ opacity: 0.75 }}
-                  >
-                    [{ep.nameSource || "raw"}]
-                  </span>
                 </div>
                 <div className="endpoint-meta">
                   {ep.flow} &middot; {formatHz(ep.sampleRateHz)}
@@ -282,6 +320,55 @@ export default function HealthDashboard() {
           </p>
         )}
         {cpu !== null && !cpu.available && <p className="muted">{cpu.note}</p>}
+      </div>
+
+      {/* Rig Doctor — full machine diagnostics. Nobody gets told "buy a better PC." */}
+      <div className="temp-block">
+        <h3>Rig Doctor</h3>
+        {!fatal && stats === null && <p className="muted">Reading the machine…</p>}
+        {!fatal && stats !== null && (
+          <>
+            <div className="endpoint-meta" style={{ marginBottom: "0.5rem" }}>
+              {stats.cpuName} ({stats.cpuCores} cores) &middot; CPU {stats.cpuPct.toFixed(1)}%
+              &middot; RAM {stats.memUsedGb.toFixed(1)}/{stats.memTotalGb.toFixed(1)} GB
+              ({stats.memPct.toFixed(0)}%)
+              {stats.cpuTempC !== null && (
+                <> &middot; CPU {stats.cpuTempC.toFixed(1)} °C <span className="muted">({stats.tempSource})</span></>
+              )}
+            </div>
+            {stats.disks.length > 0 && (
+              <div className="endpoint-meta" style={{ marginBottom: "0.5rem" }}>
+                {stats.disks.map((d) => (
+                  <span key={d.mount} style={{ marginRight: "1rem" }}>
+                    {d.mount} {d.availableGb.toFixed(1)} GB free ({d.usedPct.toFixed(0)}% used)
+                  </span>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+        {!fatal && diagnosis !== null && (
+          <ul className="endpoint-list">
+            {diagnosis.map((d, i) => (
+              <li key={i} className={`endpoint endpoint-${d.level === "ok" ? "pass" : d.level === "fix" ? "unknown" : "warn"}`}>
+                <span className={`pill ${d.level === "ok" ? "pill-pass" : d.level === "fix" ? "pill-error" : "pill-warn"}`}>
+                  {d.level === "ok" ? "OK" : d.level === "fix" ? "FIX" : "WATCH"}
+                </span>
+                <div className="endpoint-body">
+                  <div className="endpoint-name">{d.headline}</div>
+                  <div className="endpoint-meta">{d.detail}</div>
+                  {d.fixes.length > 0 && (
+                    <ul style={{ margin: "0.25rem 0 0 1rem", padding: 0 }}>
+                      {d.fixes.map((f, j) => (
+                        <li key={j} className="endpoint-meta" style={{ listStyle: "disc" }}>{f}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </section>
   );

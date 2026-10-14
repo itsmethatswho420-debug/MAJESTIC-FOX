@@ -82,6 +82,48 @@ pub fn get_cpu_temp() -> Result<CpuTemp, String> {
     })
 }
 
+/// Zen USB presence: true when a Sony DualSense (VID_054C/PID_0CE6) is
+/// visible on USB. The Zen presents itself as a DualSense through its
+/// CONSOLE/PC port, so this is the "Zen connected" signal for the Health
+/// tab. Best-effort via WMI — never fails the whole health check.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZenPresence {
+    pub connected: bool,
+    pub detail: String,
+}
+
+#[command]
+pub fn get_zen_presence() -> Result<ZenPresence, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        // DualSense fingerprint: VID_054C&PID_0CE6. Get-PnpDevice is the
+        // fastest reliable probe; hardware IDs carry the VID/PID.
+        let ps = r#"Get-PnpDevice -Class USB -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -match 'VID_054C.*PID_0CE6' -and $_.Status -eq 'OK' } | Select-Object -First 1"#;
+        let out = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps])
+            .output()
+            .map_err(|e| format!("USB probe failed: {e}"))?;
+        let found = out.status.success() && !String::from_utf8_lossy(&out.stdout).trim().is_empty();
+        Ok(ZenPresence {
+            connected: found,
+            detail: if found {
+                "Zen detected (DualSense fingerprint VID_054C/PID_0CE6)".to_string()
+            } else {
+                "No Zen found on USB — check the CONSOLE/PC port cable.".to_string()
+            },
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(ZenPresence {
+            connected: false,
+            detail: "USB detection is implemented for Windows only.".to_string(),
+        })
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::AudioEndpoint;

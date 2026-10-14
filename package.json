@@ -1,10 +1,11 @@
 {
   "dependencies": {
     "@tauri-apps/api": "^2.4.0",
+    "@tauri-apps/plugin-fs": "^2.7.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
-  "description": "Majestic Fox \u2014 Muse co-pilot. Phase 1: stream co-pilot rig-health checks.",
+  "description": "Majestic Fox — Muse co-pilot. Phase 1: stream co-pilot rig-health checks.",
   "devDependencies": {
     "@tauri-apps/cli": "^2.4.0",
     "@types/react": "^19.3.0",

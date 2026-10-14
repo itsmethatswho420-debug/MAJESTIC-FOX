@@ -1,13 +1,19 @@
 import { useState } from "react";
 import HealthDashboard from "./components/HealthDashboard";
 import ProfileManager from "./components/ProfileManager";
+import ControllerTab from "./components/ControllerTab";
+import ChatPanel from "./components/ChatPanel";
+import ClipStudio from "./components/ClipStudio";
 import MusePanel from "./components/MusePanel";
 
-type Tab = "health" | "profiles" | "muse";
+type Tab = "health" | "profiles" | "controller" | "chat" | "clips" | "muse";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "health", label: "Health" },
   { id: "profiles", label: "Profiles" },
+  { id: "controller", label: "Controller" },
+  { id: "chat", label: "Chat" },
+  { id: "clips", label: "Clips" },
   { id: "muse", label: "Muse" },
 ];
 
@@ -43,6 +49,12 @@ export default function App() {
           <HealthDashboard />
         ) : tab === "profiles" ? (
           <ProfileManager />
+        ) : tab === "controller" ? (
+          <ControllerTab />
+        ) : tab === "chat" ? (
+          <ChatPanel />
+        ) : tab === "clips" ? (
+          <ClipStudio />
         ) : (
           <MusePanel />
         )}
