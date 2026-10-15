@@ -18,6 +18,9 @@ export default function MusePanel() {
         width: 430,
         height: 860,
         center: true,
+        // Harry 2026-10-15: pinned — stays on top of the stream setup
+        // so the chat is always beside him while live.
+        alwaysOnTop: true,
       });
       w.once("tauri://error", (e) => {
         setStatus(`Could not open Muse: ${String((e as { payload?: unknown }).payload ?? e)}`);
