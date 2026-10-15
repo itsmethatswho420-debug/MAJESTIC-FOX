@@ -144,13 +144,13 @@ fn seed_records() -> Vec<ControllerRecord> {
             r2_deadzone: 0,
         },
         aiming: AimingSettings {
-            horiz_sensitivity: 0, // not captured yet — Harry fills in
-            vert_sensitivity: 0,
-            response_curve: "Dynamic".to_string(),
-            curve_slope_scale: 0,
-            ads_sensitivity_multiplier: 1.0,
+            horiz_sensitivity: 165,
+            vert_sensitivity: 160,
+            response_curve: "Linear".to_string(),
+            curve_slope_scale: 0.80,
+            ads_sensitivity_multiplier: 0.95,
             target_aim_assist: true,
-            ads_aim_assist: true,
+            ads_aim_assist: false,
             ads_transition_timing: "Gradual".to_string(),
             look_inversion: false,
         },
@@ -169,13 +169,13 @@ fn seed_records() -> Vec<ControllerRecord> {
             notes: "".to_string(),
         },
         zen: Some(ZenValues {
-            antirecoil_vertical: 37,
+            antirecoil_vertical: 39,
             antirecoil_horizontal: 0,
-            script_curve: "aggressive-1.15x".to_string(),
-            script_slot: "1".to_string(),
-            notes: "Fox_V2_Harry_Aggressive.gpc — in testing 2026-10-14".to_string(),
+            script_curve: "aggressive-1.15x-down/1.0x-up".to_string(),
+            script_slot: "5".to_string(),
+            notes: "Fox_V2_Harry_Aggressive.gpc (5) — asymmetric vertical curve, in testing 2026-10-15".to_string(),
         }),
-        notes: "Seed from live capture 2026-10-13. Fill in sensitivity values.".to_string(),
+        notes: "Harry's live values captured from his screen 2026-10-15. Extra CoD settings (combat, movement behaviors, tactical sprint, etc.) go in Notes until structured fields are added.".to_string(),
     }]
 }
 
