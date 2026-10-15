@@ -108,7 +108,7 @@ export default function ControllerTab() {
       setRecords(await invoke<ControllerRecord[]>("save_controller_record", { record: editing }));
       setEditing(null);
     } catch (e) {
-      setFatal(e instanceof Error ? e.message : "Save failed.");
+      setFatal(typeof e === "string" ? e : e instanceof Error ? e.message : "Save failed.");
     } finally {
       setSaving(false);
     }
@@ -119,7 +119,7 @@ export default function ControllerTab() {
       setRecords(await invoke<ControllerRecord[]>("delete_controller_record", { id }));
       if (editing?.id === id) setEditing(null);
     } catch (e) {
-      setFatal(e instanceof Error ? e.message : "Delete failed.");
+      setFatal(typeof e === "string" ? e : e instanceof Error ? e.message : "Delete failed.");
     }
   };
 

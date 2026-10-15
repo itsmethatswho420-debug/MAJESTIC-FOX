@@ -35,7 +35,7 @@ pub struct AimingSettings {
     pub vert_sensitivity: u8,
     /// "Standard" | "Linear" | "Dynamic"
     pub response_curve: String,
-    pub curve_slope_scale: u8,
+    pub curve_slope_scale: f32,
     pub ads_sensitivity_multiplier: f32,
     pub target_aim_assist: bool,
     pub ads_aim_assist: bool,
